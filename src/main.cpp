@@ -137,7 +137,7 @@ void bench(uint32_t bitsBegin, uint32_t bitsEnd, uint64_t blockSize, uint32_t ru
 
 	std::vector<uint32_t> src(blockSize);
 
-	std::cout << "bits\tpack forblock:fastpfor[ms]\tunpack forblock:fastpfor[ms]\tunpack forblock:fastpfor[M/s]" << std::endl;
+	std::cout << "bits\tpack sserialize:forblock:fastpfor[ms]\tunpack sserialize:forblock:fastpfor[ms]\tunpack sserialize:forblock:fastpfor[M/s]" << std::endl;
 		
 	std::cout << std::setprecision(4);
 
