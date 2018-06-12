@@ -44,7 +44,7 @@ public:
 		const uint8_t * sit = memv.data();
 		uint32_t * dit = block.data();
 		uint32_t count = src.size();
-		m_unpackers.at(bits)->unpack(sit, dit, count);
+		m_unpackers.at(bits)->unpack_blocks(sit, dit, count);
 		if (count != 0) {
 			throw std::runtime_error("BencherSserialize: blocksize not a multiple unpacker blocksize");
 		}
