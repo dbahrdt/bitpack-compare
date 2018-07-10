@@ -8,17 +8,16 @@
 #include <iostream>
 #include <iomanip>
 #include <array>
-
-
-struct BencherSserialize {
-	BencherSserialize() : dest(0, sserialize::MM_PROGRAM_MEMORY) {
-		for(uint32_t bits(1); bits < m_unpackers.size(); ++bits) {
-			m_unpackers[bits] = sserialize::BitunpackerInterface::unpacker(bits);
-		}
-	}
+/*
+struct BencherPFoRBlock {
+	BencherPFoRBlock(sserialize::ItemIndex::Types type) :
+	m_type(type),
+	dest(0, sserialize::MM_PROGRAM_MEMORY)
+	{}
 public:
 	void pack(const std::vector<uint32_t> & src, uint32_t bits) {
 		dest.resetPtrs();
+		
 		sserialize::MultiBitBackInserter inserter(dest);
 		inserter.push_back(src.begin(), src.end(), bits);
 	}
@@ -44,13 +43,71 @@ public:
 		const uint8_t * sit = memv.data();
 		uint32_t * dit = block.data();
 		uint32_t count = src.size();
+		m_unpackers.at(bits)->unpack(sit, dit, count);
+		if (count != 0) {
+			throw std::runtime_error("BencherSserialize: blocksize not a multiple unpacker blocksize");
+		}
+	}
+public:
+	sserialize::ItemIndex::Types m_type;
+	sserialize::UByteArrayAdapter dest;
+	std::vector<uint32_t> block;
+};*/
+
+
+struct BencherSserialize {
+	BencherSserialize() : dest(0, sserialize::MM_PROGRAM_MEMORY) {
+		for(uint32_t bits(1); bits < m_unpackers.size(); ++bits) {
+			m_unpackers[bits] = sserialize::BitpackingInterface::instance(bits);
+		}
+	}
+public:
+	void pack(const std::vector<uint32_t> & src, uint32_t bits) {
+		dest.resetPtrs();
+		
+		dest.resize(sserialize::CompactUintArray::minStorageBytes(bits, src.size()));
+		dest.zero();
+		auto memv = dest.asMemView();
+		const uint32_t * sit = src.data();
+		uint8_t * dit = memv.data();
+		uint32_t count = src.size();
+		m_unpackers.at(bits)->pack_blocks(sit, dit, count);
+		if (count != 0) {
+			throw std::runtime_error("BencherSserialize: blocksize not a multiple unpacker blocksize");
+		}
+		memv.flush();
+// 		sserialize::MultiBitBackInserter inserter(dest);
+// 		inserter.push_back(src.begin(), src.end(), bits);
+	}
+	void check(const std::vector<uint32_t> & src, uint32_t bits) {
+		if (block.size() != src.size()) {
+			throw std::runtime_error("BencherSserialize: block.size != src.size");
+		}
+		for(std::size_t i(0), s(src.size()); i < s; ++i) {
+			if (src[i] != block[i]) {
+				throw std::runtime_error(
+					"BencherSserialize: bits=" + std::to_string(bits) + " i=" +
+					std::to_string(i) + " block[i]=" + std::to_string(block[i])
+					+ " != " + "src[i]=" + std::to_string(src[i]));
+			}
+		}
+	}
+	void warmup(const std::vector<uint32_t> & src, uint32_t bits) {
+		unpack(src, bits);
+	}
+	void unpack(const std::vector<uint32_t> & src, uint32_t bits) {
+		block.resize(src.size());
+		auto memv = dest.asMemView();
+		const uint8_t * sit = memv.data();
+		uint32_t * dit = block.data();
+		uint32_t count = src.size();
 		m_unpackers.at(bits)->unpack_blocks(sit, dit, count);
 		if (count != 0) {
 			throw std::runtime_error("BencherSserialize: blocksize not a multiple unpacker blocksize");
 		}
 	}
 public:
-	std::array<std::unique_ptr<sserialize::BitunpackerInterface>, 57> m_unpackers;
+	std::array<std::unique_ptr<sserialize::BitpackingInterface>, 57> m_unpackers;
 	sserialize::UByteArrayAdapter dest;
 	std::vector<uint32_t> block;
 };
@@ -149,14 +206,17 @@ void bench(uint32_t bitsBegin, uint32_t bitsEnd, uint64_t blockSize, uint32_t ru
 		}
 		
 		if (benchSelector & BS_SSERIALIZE && bits <= 56) { //sserialize
-			sserializeEncode.begin();
 			bs.pack(src, bits);
+			bs.unpack(src, bits);
+			bs.check(src, bits);
+			
+			sserializeEncode.begin();
+			for(uint32_t i(0); i < runs; ++i) {
+				bs.pack(src, bits);
+			}
 			sserializeEncode.end();
 			
 			bs.warmup(src, bits);
-			bs.check(src, bits);
-			bs.warmup(src, bits);
-			
 			sserializeDecode.begin();
 			for(uint32_t i(0); i < runs; ++i) {
 				bs.unpack(src, bits);
@@ -165,14 +225,17 @@ void bench(uint32_t bitsBegin, uint32_t bitsEnd, uint64_t blockSize, uint32_t ru
 		} //end sserialize
 
 		if (benchSelector & BS_FORBLOCK && bits <= 32) { //for block
+			bb.pack(src, bits);			
+			bb.unpack(src, bits);
+			bb.check(src, bits);
+			
 			forBlockEncode.begin();
-			bb.pack(src, bits);
+			for(uint32_t i(0); i < runs; ++i) {
+				bb.pack(src, bits);
+			}
 			forBlockEncode.end();
 			
 			bb.warmup(src, bits);
-			bb.check(src, bits);
-			bb.warmup(src, bits);
-			
 			forBlockDecode.begin();
 			for(uint32_t i(0); i < runs; ++i) {
 				bb.unpack(src, bits);
@@ -181,14 +244,17 @@ void bench(uint32_t bitsBegin, uint32_t bitsEnd, uint64_t blockSize, uint32_t ru
 		} //end sserialize
 
 		if (benchSelector & BS_FAST_PFOR && bits <= 32) { //FastPFoR
-			fastpforEncode.begin();
 			bf.pack(src, bits);
+			bf.unpack(src, bits);
+			bf.check(src, bits);
+			
+			fastpforEncode.begin();
+			for(uint32_t i(0); i < runs; ++i) {
+				bf.pack(src, bits);
+			}
 			fastpforEncode.end();
 			
 			bf.warmup(src, bits);
-			bf.check(src, bits);
-			bf.warmup(src, bits);
-			
 			fastpforDecode.begin();
 			for(uint32_t i(0); i < runs; ++i) {
 				bf.unpack(src, bits);
@@ -197,9 +263,9 @@ void bench(uint32_t bitsBegin, uint32_t bitsEnd, uint64_t blockSize, uint32_t ru
 		} //end FastPFoR
 		
 		std::cout << bits << '\t';
-		std::cout << sserializeEncode.elapsedMilliSeconds() << ':';
-		std::cout << forBlockEncode.elapsedMilliSeconds() << ':';
-		std::cout << fastpforEncode.elapsedMilliSeconds() << '\t';
+		std::cout << sserializeEncode.elapsedMilliSeconds()/runs << ':';
+		std::cout << forBlockEncode.elapsedMilliSeconds()/runs << ':';
+		std::cout << fastpforEncode.elapsedMilliSeconds()/runs << '\t';
 		
 		std::cout << sserializeDecode.elapsedMilliSeconds()/runs << ':';
 		std::cout << forBlockDecode.elapsedMilliSeconds()/runs << ':';
