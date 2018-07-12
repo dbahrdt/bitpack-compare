@@ -125,8 +125,9 @@ public:
 		
 	}
 	void check(const std::vector<uint32_t> & src, uint32_t bits) {
-		if (dest.tellPutPtr() != (bits*src.size()/8 + uint64_t((bits*src.size()%8)>0))) {
-			throw std::runtime_error("Compressed size wrong: " + std::to_string(dest.tellGetPtr()));
+		uint64_t blockBytes = sserialize::CompactUintArray::minStorageBytes(bits, src.size());
+		if (dest.tellPutPtr() != blockBytes) {
+			throw std::runtime_error("Compressed size wrong: SHOULD=" + std::to_string(blockBytes) + "; IS=" + std::to_string(dest.tellPutPtr()));
 		}
 		for(uint32_t i(0), prev(0); i < src.size(); ++i) {
 			prev += src[i];
@@ -147,13 +148,19 @@ public:
 };
 
 struct BencherFastPFoR {
-	BencherFastPFoR()
-	{}
+	static constexpr std::size_t BlockSize = 16;
+public:
+	BencherFastPFoR() {}
 public:
 	void pack(const std::vector<uint32_t> & src, uint32_t bits) {
 		uint64_t totalBits = src.size()*bits;
-		dest.resize(src.size() + packer.HowManyMiniBlocks); //totalBits/32 + uint32_t((totalBits%32)>0));
-		packer.encodeArray(src.data(), src.size(), dest.data(), nvalue);
+		dest.resize(4*src.size());
+		std::size_t numBlocks = src.size()/BlockSize;
+		auto out = dest.data();
+		for(std::size_t i(0); i < numBlocks; ++i) {
+			out = FastPForLib::fastunalignedpackwithoutmask_16(src.data() + i*BlockSize, out, bits);
+		}
+// 		packer.encodeArray(src.data(), src.size(), dest.data(), nvalue);
 	}
 	void check(const std::vector<uint32_t> & src, uint32_t bits) {
 		if (block.size() != src.size()) {
@@ -173,18 +180,30 @@ public:
 	}
 	void unpack(const std::vector<uint32_t> & src, uint32_t bits) {
 		block.resize(src.size());
-		packer.decodeArray(dest.data(), src.size(), block.data(), nvalue);
+		if (src.size() % 32 != 0) {
+			throw std::runtime_error("src.size not divisible by 32");
+		}
+		std::size_t numBlocks = src.size()/BlockSize;
+		const uint8_t * in = dest.data();
+		uint32_t * out = block.data();
+		for(std::size_t i(0); i < numBlocks; ++i) {
+			in = FastPForLib::fastunalignedunpack_16(in, out + i*BlockSize, bits);
+		}
+// 		packer.decodeArray(dest.data(), src.size(), block.data(), nvalue);
 	}
 public:
 	FastPForLib::BinaryPacking<8> packer;
-	std::vector<uint32_t> dest;
+	std::vector<uint8_t> dest;
 	std::vector<uint32_t> block;
 	size_t nvalue;
 };
 
 typedef enum {BS_SSERIALIZE=1, BS_FORBLOCK=2, BS_FAST_PFOR=4} BenchSelector;
 
-void bench(uint32_t bitsBegin, uint32_t bitsEnd, uint64_t blockSize, uint32_t runs, int benchSelector) {
+
+typedef enum { PT_TIMES, PT_THROUGHPUT} PrintType;
+
+void bench(uint32_t bitsBegin, uint32_t bitsEnd, uint64_t blockSize, uint32_t runs, int benchSelector, int printType, char seperator) {
 	sserialize::TimeMeasurer sserializeEncode, forBlockEncode, fastpforEncode;
 	sserialize::TimeMeasurer sserializeDecode, forBlockDecode, fastpforDecode;
 	
@@ -193,9 +212,39 @@ void bench(uint32_t bitsBegin, uint32_t bitsEnd, uint64_t blockSize, uint32_t ru
 	BencherFastPFoR bf;
 
 	std::vector<uint32_t> src(blockSize);
-
-	std::cout << "bits\tpack sserialize:forblock:fastpfor[ms]\tunpack sserialize:forblock:fastpfor[ms]\tunpack sserialize:forblock:fastpfor[M/s]" << std::endl;
-		
+	
+	std::stringstream headerss;
+	std::string unitstr;
+	if (printType == PT_TIMES) {
+		unitstr = "[ms]";
+	}
+	else {
+		unitstr = "[M/s]";
+	}
+	{
+		bool hasPrev = false;
+		if (benchSelector & BS_SSERIALIZE) {
+			headerss << "sserialize";
+			hasPrev = true;
+		}
+		if (benchSelector & BS_FORBLOCK) {
+			if (hasPrev) {
+				headerss << seperator;
+			}
+			std::cout << "forblock";
+			hasPrev = true;
+		}
+		if (benchSelector & BS_FAST_PFOR) {
+			if (hasPrev) {
+				headerss << seperator;
+			}
+			headerss << "fastpfor";
+			hasPrev = true;
+		}
+	}
+	std::cout << "#pack, then unpack" << std::endl;
+	std::cout << "#unit: " << unitstr << std::endl;
+	std::cout << "bits" << seperator <<  headerss.str() << seperator << headerss.str() << std::endl;
 	std::cout << std::setprecision(4);
 
 	for(uint32_t bits(bitsBegin); bits <= bitsEnd; ++bits) {
@@ -262,18 +311,51 @@ void bench(uint32_t bitsBegin, uint32_t bitsEnd, uint64_t blockSize, uint32_t ru
 			fastpforDecode.end();
 		} //end FastPFoR
 		
-		std::cout << bits << '\t';
-		std::cout << sserializeEncode.elapsedMilliSeconds()/runs << ':';
-		std::cout << forBlockEncode.elapsedMilliSeconds()/runs << ':';
-		std::cout << fastpforEncode.elapsedMilliSeconds()/runs << '\t';
+		std::cout << bits;
 		
-		std::cout << sserializeDecode.elapsedMilliSeconds()/runs << ':';
-		std::cout << forBlockDecode.elapsedMilliSeconds()/runs << ':';
-		std::cout << fastpforDecode.elapsedMilliSeconds()/runs << '\t';
-		
-		std::cout << ((blockSize*runs)/(double(sserializeDecode.elapsedUseconds())/1000000))/1000000 << ':';
-		std::cout << ((blockSize*runs)/(double(forBlockDecode.elapsedUseconds())/1000000))/1000000 << ':';
-		std::cout << ((blockSize*runs)/(double(fastpforDecode.elapsedUseconds())/1000000))/1000000 << std::endl;
+		if (printType == PT_TIMES) {
+			if (benchSelector & BS_SSERIALIZE) {
+				std::cout << seperator << sserializeEncode.elapsedMilliSeconds()/runs;
+			}
+			if (benchSelector & BS_FORBLOCK) {
+				std::cout << seperator << forBlockEncode.elapsedMilliSeconds()/runs;
+			}
+			if (benchSelector & BS_FAST_PFOR) {
+				std::cout << seperator << forBlockEncode.elapsedMilliSeconds()/runs;
+			}
+			if (benchSelector & BS_SSERIALIZE) {
+				std::cout << seperator << sserializeDecode.elapsedMilliSeconds()/runs;
+			}
+			if (benchSelector & BS_FORBLOCK) {
+				std::cout << seperator<< forBlockDecode.elapsedMilliSeconds()/runs;
+			}
+			if (benchSelector & BS_FAST_PFOR) {
+				std::cout << seperator << fastpforDecode.elapsedMilliSeconds()/runs;
+			}
+			std::cout << std::endl;
+		}
+		else {
+			if (benchSelector & BS_SSERIALIZE) {
+				std::cout << seperator << ((blockSize*runs)/(double(sserializeEncode.elapsedUseconds())/1000000))/1000000 ;
+			}
+			if (benchSelector & BS_FORBLOCK) {
+				std::cout << seperator << ((blockSize*runs)/(double(forBlockEncode.elapsedUseconds())/1000000))/1000000;
+			}
+			if (benchSelector & BS_FAST_PFOR) {
+				std::cout << seperator << ((blockSize*runs)/(double(fastpforEncode.elapsedUseconds())/1000000))/1000000;
+			}
+			
+			if (benchSelector & BS_SSERIALIZE) {
+				std::cout << seperator << ((blockSize*runs)/(double(sserializeDecode.elapsedUseconds())/1000000))/1000000;
+			}
+			if (benchSelector & BS_FORBLOCK) {
+				std::cout << seperator << ((blockSize*runs)/(double(forBlockDecode.elapsedUseconds())/1000000))/1000000;
+			}
+			if (benchSelector & BS_FAST_PFOR) {
+				std::cout << seperator << ((blockSize*runs)/(double(fastpforDecode.elapsedUseconds())/1000000))/1000000;
+			}
+			std::cout << std::endl;
+		}
 	}
 }
 
@@ -281,12 +363,15 @@ void help() {
 	std::cout << "prg -bb <bits begin> -be <bits end> -s <log_2(test size)> -r <test runs> [-b <test selection = sserialize|forblock|fastpfor>]*" << std::endl;
 }
 
+
 int main(int argc, char ** argv) {
 	uint32_t bitsBegin = 1;
 	uint32_t bitsEnd = 32;
 	uint64_t blockSize = 1 << 25;
 	uint32_t runs = 16;
 	int benchSelector = 0;
+	int printType = PT_THROUGHPUT;
+	char seperator = '\t';
 	for(int i(0); i < argc; ++i) {
 		std::string token(argv[i]);
 		if (token == "-bb" && i+1 < argc) {
@@ -330,12 +415,19 @@ int main(int argc, char ** argv) {
 			help();
 			return 0;
 		}
+		else if (token == "-t") {
+			printType = PT_TIMES;
+		}
+		else if ((token == "--sep" || token == "-sep") && i+1 < argc) {
+			seperator = argv[i+1][0];
+			++i;
+		}
 	}
 	
 	if (!benchSelector) {
 		benchSelector = std::numeric_limits<int>::max();
 	}
 	
-	bench(bitsBegin, bitsEnd, blockSize, runs, benchSelector);
+	bench(bitsBegin, bitsEnd, blockSize, runs, benchSelector, printType, seperator);
 	return 0;
 }
