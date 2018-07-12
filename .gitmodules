@@ -1,6 +1,6 @@
 [submodule "vendor/fastpfor"]
 	path = vendor/fastpfor
-	url = https://github.com/lemire/FastPFor
+	url = https://github.com/dbahrdt/FastPFor
 [submodule "vendor/sserialize"]
 	path = vendor/sserialize
 	url = https://github.com/dbahrdt/sserialize
