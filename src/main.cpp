@@ -360,7 +360,7 @@ void bench(uint32_t bitsBegin, uint32_t bitsEnd, uint64_t blockSize, uint32_t ru
 }
 
 void help() {
-	std::cout << "prg -bb <bits begin> -be <bits end> -s <log_2(test size)> -r <test runs> [-b <test selection = sserialize|forblock|fastpfor>]*" << std::endl;
+	std::cout << "prg -bb <bits begin> -be <bits end> -s <log_2(test size)> -r <test runs> [-b <test selection = sserialize|forblock|fastpfor>]* --sep <table seperator character> [-t]" << std::endl;
 }
 
 
